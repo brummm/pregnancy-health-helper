@@ -1,0 +1,17 @@
+Flask
+Flask-CORS
+librosa
+soundfile
+transformers
+torch
+faster-whisper
+google-genai
+noisereduce
+scikit-learn
+pandas
+numpy
+joblib
+python-dotenv
+jupyter
+kagglehub
+notebook

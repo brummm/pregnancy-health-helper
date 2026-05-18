@@ -5,7 +5,6 @@ from google import genai
 
 class GeminiTranscription(BaseTranscription):
     def __init__(self):
-        # Using the standard gemini-1.5-flash-latest name
         self.client = genai.Client()
         self.initial_prompt = "Esta é uma entrevista de saúde com uma gestante em português brasileiro. Ela discute sintomas, sentimentos e histórico médico. Por favor, transcreva o áudio exatamente como falado."
 

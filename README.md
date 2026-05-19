@@ -87,3 +87,5 @@ Fill the form with some random data or choose this:
 For the audio file, you can test your own or select one of these samples:
 - `./sample/interview_audio_sample.mp3`: Initial interview sample (trimmed).
 - `./sample/interview_audio_sample2.mp3`: Second interview sample (trimmed to 10:41).
+
+Use the .env.model file if you wanna run the project on your machine.

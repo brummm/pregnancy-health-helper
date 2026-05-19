@@ -2,7 +2,7 @@ from .base_transcription import BaseTranscription
 from faster_whisper import WhisperModel
 import torch
 
-class LocalTranscription(BaseTranscription):
+class WhisperTranscription(BaseTranscription):
     def __init__(self, model_size="large-v3-turbo"):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute_type = "float16" if device == "cuda" else "int8"

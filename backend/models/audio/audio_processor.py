@@ -5,42 +5,54 @@ from transformers import pipeline
 import torch
 import os
 import logging
-from .transcription.local_transcription import LocalTranscription
+import gc
+from .transcription.whisper_transcription import WhisperTranscription
 from .transcription.gemini_transcription import GeminiTranscription
 
 logger = logging.getLogger(__name__)
 
 class AudioProcessor:
     def __init__(self):
-        # Initialize transcription strategies
-        self.local_transcriber = LocalTranscription()
+        # Detect device
+        self.device = 0 if torch.cuda.is_available() else -1
+
+        # Transcription engines remain lazy-loaded
+        self.whisper_transcriber = None
         self.gemini_transcriber = None
         
-        # Sentiment analysis pipeline (multilingual)
+        # Preload models used in every case
+        logger.info("Preloading Sentiment and Zero-Shot models...")
         self.sentiment_analyzer = pipeline(
             "sentiment-analysis", 
             model="nlptown/bert-base-multilingual-uncased-sentiment",
-            device=0 if torch.cuda.is_available() else -1
+            device=self.device
         )
-
-        # Zero-shot classification pipeline for robust condition detection
         self.zero_shot_classifier = pipeline(
             "zero-shot-classification", 
             model="facebook/bart-large-mnli",
-            device=0 if torch.cuda.is_available() else -1
+            device=self.device
         )
+
+    def _get_whisper_transcriber(self):
+        if self.whisper_transcriber is None:
+            # Clear other large models if possible
+            gc.collect()
+            logger.info("Loading Whisper model into RAM...")
+            self.whisper_transcriber = WhisperTranscription()
+        return self.whisper_transcriber
 
     def _get_gemini_transcriber(self):
         if self.gemini_transcriber is None:
+            logger.info("Loading Gemini API client...")
             self.gemini_transcriber = GeminiTranscription()
         return self.gemini_transcriber
 
-    def process_audio(self, audio_path, bypass_transcription=False, transcription_method='local'):
+    def process_audio(self, audio_path, bypass_transcription=False, transcription_method='whisper'):
         """
-        Processes audio file following the implementation pipeline in plan.md:
+        Processes audio file
         1. Ingestion & Cleaning (Denoise)
         2. Acoustic Feature Extraction
-        3. Linguistic Analysis (Choice of Local or Gemini)
+        3. Linguistic Analysis (Choice of Whisper or Gemini)
         4. Fusion for Condition Detection
         """
         logger.info(f"Processing audio: {audio_path} using method: {transcription_method}")
@@ -49,7 +61,6 @@ class AudioProcessor:
         try:
             logger.info("STEP 1: Starting audio ingestion and cleaning (librosa load & noisereduce)...")
             y, sr = librosa.load(audio_path, sr=16000)
-            # Denoise the audio
             y_denoised = nr.reduce_noise(y=y, sr=sr)
             logger.info("STEP 1: Audio ingestion and cleaning completed successfully.")
         except Exception as e:
@@ -71,15 +82,13 @@ class AudioProcessor:
             if transcription_method == 'gemini':
                 text = self._get_gemini_transcriber().transcribe(audio_path)
             else:
-                text = self.local_transcriber.transcribe(y_denoised)
+                text = self._get_whisper_transcriber().transcribe(y_denoised)
             
             logger.info(f"STEP 3: Transcription complete (excerpt): {text[:50]}...")
         
         logger.info("STEP 3: Running sentiment analysis on transcription...")
-        # Sentiment analysis with truncation
         sentiment_result = self.sentiment_analyzer(text, truncation=True, max_length=512)[0]
         
-        # Map star labels to meaningful clinical terms
         sentiment_map = {
             "1 star": "Muito Negativa / Estresse Elevado",
             "2 stars": "Negativa / Desconforto",
@@ -88,7 +97,6 @@ class AudioProcessor:
             "5 stars": "Muito Positiva / Excelente"
         }
         sentiment_label = sentiment_map.get(sentiment_result['label'], sentiment_result['label'])
-        
         logger.info(f"STEP 3: Sentiment analysis complete. Score: {sentiment_result['score']:.4f} ({sentiment_label})")
 
         # --- STEP 4: Condition Detection (Fusion) ---
@@ -106,27 +114,17 @@ class AudioProcessor:
         }
 
     def _extract_acoustic_features(self, y, sr):
-        """
-        Extracts prosodic and spectral features as described in Step 2 of plan.md
-        """
-        # 1. Prosodic: Pitch (F0)
         pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-        # Extract mean pitch where magnitude is significant
         pitch_values = pitches[pitches > 0]
         mean_pitch = float(np.mean(pitch_values)) if len(pitch_values) > 0 else 0
         pitch_std = float(np.std(pitch_values)) if len(pitch_values) > 0 else 0
 
-        # 2. Energy/Intensity (RMS)
         rms = librosa.feature.rms(y=y)
         mean_energy = float(np.mean(rms))
 
-        # 3. Voice Quality: Simplified Jitter (local) and Shimmer
-        # We calculate zero crossing rate as a proxy for 'scratchiness' (GERD indicator)
         zcr = librosa.feature.zero_crossing_rate(y)
         mean_zcr = float(np.mean(zcr))
 
-        # 4. Speech Rate Estimation (simplified)
-        # Count silent intervals vs non-silent
         intervals = librosa.effects.split(y, top_db=30)
         total_speech_duration = sum([end - start for start, end in intervals]) / sr
         
@@ -139,12 +137,7 @@ class AudioProcessor:
         }
 
     def _analyze_conditions_fused(self, text, acoustics):
-        """
-        Combines acoustic fingerprints and robust zero-shot linguistic classification.
-        """
         detected = []
-        
-        # Define labels corresponding to the conditions
         labels = [
             "depressão, tristeza ou sentir-se sobrecarregada", 
             "exaustão física, sono ou névoa mental", 
@@ -152,11 +145,8 @@ class AudioProcessor:
             "relato de violência, perigo ou machucados"
         ]
         
-        # The model analyzes the full context of the transcription
-        # Truncate the text to the first 800 characters to be safe for the classifier
         truncated_text = text[:800] if len(text) > 800 else text
         
-        # Run classification
         result = self.zero_shot_classifier(
             truncated_text, 
             candidate_labels=labels, 
@@ -164,28 +154,19 @@ class AudioProcessor:
         )
         scores = dict(zip(result['labels'], result['scores']))
         
-        # 1. Post-Partum Depression
-        ppd_score = scores.get("depressão, tristeza ou sentir-se sobrecarregada", 0)
-        if ppd_score > 0.5 or (acoustics['pitch_variability'] < 50 and acoustics['speech_duration_ratio'] < 0.5):
+        if scores.get("depressão, tristeza ou sentir-se sobrecarregada", 0) > 0.5 or (acoustics['pitch_variability'] < 50 and acoustics['speech_duration_ratio'] < 0.5):
             detected.append({"name": "Possíveis sinais de Depressão Pós-Parto", "matches": []})
 
-        # 2. Hormonal Fatigue
-        fatigue_score = scores.get("exaustão física, sono ou névoa mental", 0)
-        if fatigue_score > 0.5 or (acoustics['mean_pitch'] < 150 and acoustics['mean_energy'] < 0.02):
+        if scores.get("exaustão física, sono ou névoa mental", 0) > 0.5 or (acoustics['mean_pitch'] < 150 and acoustics['mean_energy'] < 0.02):
             detected.append({"name": "Sinais de Fadiga Hormonal", "matches": []})
 
-        # 3. Perinatal Anxiety
-        anxiety_score = scores.get("ansiedade, medo constante ou coração acelerado", 0)
-        if anxiety_score > 0.5 or (acoustics['pitch_variability'] > 150 and acoustics['speech_duration_ratio'] > 0.8):
+        if scores.get("ansiedade, medo constante ou coração acelerado", 0) > 0.5 or (acoustics['pitch_variability'] > 150 and acoustics['speech_duration_ratio'] > 0.8):
             detected.append({"name": "Sinais de Ansiedade Perinatal", "matches": []})
 
-        # 4. Pregnancy GERD
         if acoustics['scratchiness_index'] > 0.12:
             detected.append({"name": "Sinais de Refluxo (GERD Gestacional)", "matches": []})
 
-        # 5. Domestic Violence Signs
-        dv_score = scores.get("relato de violência, perigo ou machucados", 0)
-        if dv_score > 0.5 or (acoustics['mean_energy'] < 0.01 and acoustics['speech_duration_ratio'] < 0.4):
+        if scores.get("relato de violência, perigo ou machucados", 0) > 0.5 or (acoustics['mean_energy'] < 0.01 and acoustics['speech_duration_ratio'] < 0.4):
             detected.append({"name": "Indicadores de Alerta (Violência Doméstica)", "matches": []})
 
         return detected if detected else [{"name": "Nenhuma condição específica detectada via áudio.", "matches": []}]

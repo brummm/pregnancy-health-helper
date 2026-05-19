@@ -59,7 +59,7 @@ def predict():
         # 2. Process audio
         audio_file = request.files.get('audio')
         bypass_transcription = request.form.get('bypass_transcription') == 'true'
-        transcription_method = request.form.get('transcription_method', 'local')
+        transcription_method = request.form.get('transcription_method', 'whisper')
         audio_results = None
         
         if audio_file:

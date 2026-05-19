@@ -6,7 +6,9 @@ This application helps diagnose potential health risks and conditions in pregnan
 - **Maternal Health Risk Prediction**: Machine learning model trained on Kaggle dataset (Age, BP, Glucose, Body Temperature, etc.).
 - **Advanced Audio Analysis**: 
   - **Cleaning**: Noise reduction using `noisereduce`.
-  - **Transcription**: High-accuracy speech-to-text using OpenAI Whisper.
+  - **Transcription**: High-accuracy speech-to-text using multiple options:
+    - **Whisper (Local)**: High-performance local inference via Faster-Whisper.
+    - **Gemini (Cloud)**: Multi-modal context via Google Gemini API.
   - **Acoustic Fingerprinting**: Extraction of Pitch, Pitch Variability, Energy, and Speech Rate.
   - **Condition Detection**: Fusion of linguistic patterns and acoustic metrics to identify PPD, Fatigue, GERD, Anxiety, and Domestic Violence signs.
 - **Interactive UI**: 
@@ -69,7 +71,7 @@ The frontend will run on `http://localhost:5173`.
 - `training/`: Jupyter notebook and dataset for model training.
 
 ## Tech Stack
-- **Backend**: Flask, librosa, OpenAI Whisper, Hugging Face Transformers, Scikit-learn.
+- **Backend**: Flask, librosa, Faster-Whisper, Google Gemini API, Hugging Face Transformers, Scikit-learn.
 - **Frontend**: React, TypeScript, Vite, Vanilla CSS.
 - **Data**: [Maternal Health Risk Dataset](https://www.kaggle.com/datasets/csafrit2/maternal-health-risk-data).
 

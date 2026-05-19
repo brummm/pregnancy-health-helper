@@ -8,11 +8,15 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./training:/app/training
+      - ./sample:/app/sample
       - ./.env:/app/.env
+      - model_cache:/root/.cache
     env_file:
       - .env
     environment:
       - FLASK_ENV=development
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_OFFLINE=1
 
   frontend:
     build:
@@ -27,3 +31,6 @@ services:
       - backend
     environment:
       - VITE_API_URL=http://localhost:5001
+
+volumes:
+  model_cache:
